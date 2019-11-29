@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"time"
 
 	"github.com/julienschmidt/httprouter"
 )
@@ -26,9 +25,10 @@ func run() error {
 
 // Server is a simple microservice
 type Server struct {
-	router  *httprouter.Router
-	client  *http.Client
-	options *serverOptions
+	router    *httprouter.Router
+	client    *http.Client
+	transport *http.Transport
+	options   *serverOptions
 }
 
 // NewServer sets up and returns microservice Server
@@ -39,14 +39,7 @@ func NewServer(opt serverOptions) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.Logf(logLIVE, "Started RFC4122 urn:uuid-scheme UUID-v5 microservice with namespace:  %s  (\"%s\").\n", s.options.seed.String(), s.options.namespace)
-	var period string
-	if time.Now().Year() > 2019 {
-		period = fmt.Sprintf("%d-%d", 2019, time.Now().Year())
-	} else {
-		period = "2019"
-	}
-	s.Logf(logLIVE, "Copyright Sesam.io %s. All rights reserved.\n", period)
+	s.Logf(logLIVE, "Started Hafslund Nett RFC4122 urn:uuid-scheme UUID-v4 microservice.\n")
 	return s, nil
 }
 

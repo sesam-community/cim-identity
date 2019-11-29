@@ -6,7 +6,7 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
-	. "sesam-shaid"
+	. "cim-identity"
 )
 
 var _ = Describe("Microservice options", func() {

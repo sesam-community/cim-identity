@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,15 +20,30 @@ type serverOptions struct {
 	level     int
 	seed      uuid.UUID
 	namespace string
+	backend   backendOptions
+	defaults  defaultOptions
 	options   *Options
+}
+
+type backendOptions struct {
+	serviceURL   string
+	transport    *http.Transport
+	tokenURL     string
+	clientID     string
+	clientSecret string
+	clientScopes []string
+}
+
+type defaultOptions struct {
+	batchSize int
 }
 
 // NewOptions returns default microservice options
 func NewOptions(opt *Options) serverOptions {
 	var seed uuid.UUID = uuid.Nil
 	var log io.Writer = os.Stdout
-	level := ""
-	num := logERROR
+	levelStr := ""
+	level := logERROR
 	namespace := strings.Trim(os.Getenv("UUID_SEED"), " ")
 	if len(namespace) == 0 {
 		if opt != nil {
@@ -52,31 +69,93 @@ func NewOptions(opt *Options) serverOptions {
 		os.Exit(1)
 	}
 
+	defaults := defaultOptions{
+		batchSize: 1000,
+	}
+	backend := backendOptions{clientScopes: []string{"data-identity"}}
 	if opt != nil {
 		if val, exist := (*opt)["level"]; exist {
-			level = fmt.Sprintf("%v", val)
+			levelStr = fmt.Sprintf("%v", val)
 		}
 		if val, exist := (*opt)["log"]; exist {
 			log = val.(io.Writer)
 		}
+		if val, exist := (*opt)["serviceURL"]; exist {
+			backend.serviceURL = val.(string)
+		}
+		if val, exist := (*opt)["tokenURL"]; exist {
+			backend.tokenURL = val.(string)
+		}
+		if val, exist := (*opt)["clientID"]; exist {
+			backend.clientID = val.(string)
+		}
+		if val, exist := (*opt)["clientSecret"]; exist {
+			backend.clientSecret = val.(string)
+		}
+		if val, exist := (*opt)["clientScopes"]; exist {
+			backend.clientScopes = strings.Split(val.(string), ",")
+		}
+		if val, exist := (*opt)["batchSize"]; exist {
+			defaults.batchSize = val.(int)
+		}
 	}
 
 	if val := os.Getenv("LOG_LEVEL"); len(val) != 0 {
-		level = val
+		levelStr = val
 	}
-	if len(level) != 0 {
-		level = strings.ToUpper(level)
-		for k, val := range logLevel {
-			if val == level {
-				num = k
+	if len(levelStr) != 0 {
+		levelStr = strings.ToUpper(levelStr)
+		for k, val := range logLevelStrings {
+			if val == levelStr {
+				level = k
 				break
 			}
 		}
 	}
-	return serverOptions{log: log, level: num, seed: seed, namespace: namespace, options: opt}
+
+	if val := os.Getenv("SERVICE_URL"); len(val) != 0 {
+		backend.serviceURL = val
+	}
+	if val := os.Getenv("TOKEN_URL"); len(val) != 0 {
+		backend.tokenURL = val
+	}
+	if val := os.Getenv("CLIENT_ID"); len(val) != 0 {
+		backend.clientID = val
+	}
+	if val := os.Getenv("CLIENT_SECRET"); len(val) != 0 {
+		backend.clientSecret = val
+	}
+	if val := os.Getenv("CLIENT_SCOPES"); len(val) != 0 {
+		backend.clientScopes = strings.Split(val, ",")
+	}
+	if level >= logWARN {
+		if len(backend.serviceURL) == 0 {
+			fmt.Fprintf(log, "missing environment 'SERVICE_URL' or option 'serviceURL' for microservice OAuth2 backend communications\n.")
+		}
+		if len(backend.tokenURL) == 0 {
+			fmt.Fprintf(log, "missing environment 'TOKEN_URL' or option 'tokenURL' for microservice OAuth2 backend communications.\n")
+		}
+		if len(backend.clientID) == 0 {
+			fmt.Fprintf(log, "missing environment 'CLIENT_ID' or option 'clientID' for microservice OAuth2 backend communications.\n")
+		}
+		if len(backend.clientSecret) == 0 {
+			fmt.Fprintf(log, "missing environment 'CLIENT_SECRET' or option 'clientSecret' for microservice OAuth2 backend communications.\n")
+		}
+		if len(backend.clientScopes) == 0 {
+			fmt.Fprintf(log, "missing environment 'CLIENT_SCOPES' or option 'clientScopes' for microservice OAuth2 backend communications.\n")
+		}
+	}
+
+	if val := os.Getenv("BATCH_SIZE"); len(val) != 0 {
+		if num, err := strconv.ParseInt(val, 10, 64); err == nil {
+			defaults.batchSize = num
+		}
+	}
+
+	return serverOptions{log: log, level: level, seed: seed, namespace: namespace, backend: backend, options: opt}
 }
 
-var logLevel = []string{"OFF", "CUSTOM", "QUIET", "LIVE", "FATAL", "ERROR", "WARN", "INFO", "DEBUG", "TRACE", "ALL"}
+var logLevelStrings = []string{"OFF", "CUSTOM", "QUIET", "LIVE", "FATAL", "ERROR", "WARN", "INFO", "DEBUG", "TRACE", "ALL"}
 
 const (
 	logOFF = iota

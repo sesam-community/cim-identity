@@ -7,8 +7,11 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/julienschmidt/httprouter"
+)
+
+const (
+	lenUUID int = 36 // the length of a UUID string
 )
 
 // HandleDefault receives URL POST requests without field or namespace components,
@@ -64,8 +67,21 @@ func (s *Server) HandleFieldNamespace(w http.ResponseWriter, r *http.Request, p 
 
 	result.WriteRune('[')
 
-	nswarn := false
-	total := 0
+	// The following prevents the need for needing to iterate maps for allocating resolved aliases.
+	// Instead a simple binding is used to map multiple resolved aliases into each entity.
+	// This strategy approximates a flattened list of functionalIDs to aliasIDs.
+	keyspecs := strings.Split(p.ByName("field"), ";")
+	// specSize := len(keyspecs)
+	// batchSize := s.options.defaults.batchSize
+	// expandedSize := batchSize * specSize                  // i.e given a batch of 1000 entities each holding 5 functionalIds, the number of alias requests is 5 * 1000
+	// aliasRequest := make([]backendRequest, expandedSize)  // size of request
+	// aliasHolders := make([]strings.Builder, expandedSize) // pre-allocation, makes an efficient index mapping from returned aliases to final response where each entity contains several resolved aliases
+	// aliasIndex := 0                                       // current index in aliasHolders
+	// response := make([]map[string]interface{}, 0, batchSize)
+	batch := s.NewBatch(keyspecs)
+
+	nswarn := false // flag indicating if a warning already was issued for current batch, preventing more than one warning per batch and making microservice log more useful operationally and long-term
+	total := 0      // number of actual entities
 	for dec.More() {
 		var entity map[string]interface{}
 		if err := dec.Decode(&entity); err != nil {
@@ -78,7 +94,6 @@ func (s *Server) HandleFieldNamespace(w http.ResponseWriter, r *http.Request, p 
 			return
 		}
 
-		keyspecs := strings.Split(p.ByName("field"), ";")
 		for _, keyspec := range keyspecs {
 			// key := p.ByName("field")
 			key := keyspec // key variable mutates (is substituted), so keeping the original specification as well
@@ -225,32 +240,73 @@ func (s *Server) HandleFieldNamespace(w http.ResponseWriter, r *http.Request, p 
 					ns += ":"
 				}
 				switch value := val.(type) {
-				case []interface{}:
+				// FIXME: consider and also unit-test JSON objects as keyspec - i.e map[string]interface{} , not only arrays - what happens, can it also be supported?
+				case []interface{}: // arrays will probably trigger extending current pre-allocations since they cannot be anticipated
 					many := val.([]interface{})
-					shaids := make([]interface{}, len(many))
+					aliases := make([]interface{}, len(many))
 					for i, v := range many {
 						parts := strings.Split(fmt.Sprintf("%v", v), ":")
 						if autoval && len(parts) > 2 {
 							prefix = fmt.Sprintf("~:%s:", parts[1])
-							ns = ""
+							ns = "" // namespace is already part of value string
 						}
-						shaid := uuid.NewSHA1(s.options.seed, []byte(fmt.Sprintf("%s%v", ns, v))) // format is "namespace:value" since non-empty namespace always includes ':'
-						shaids[i] = fmt.Sprintf("%s%s", prefix, shaid.String())
-						s.Logf(logDEBUG, "[%s]:%d '%s%v'\t  ->  %s   (%x)\n", key, i, ns, v, shaid.String(), [16]byte(shaid))
+						// alias := uuid.NewSHA1(s.options.seed, []byte(fmt.Sprintf("%s%v", ns, v))) // format is "namespace:value" since non-empty namespace always includes ':'
+						// aliases[i] = fmt.Sprintf("%s%s", prefix, alias.String())
+						// b := &aliasHolders[aliasIndex]
+						// l := len(prefix)
+						// if l != 0 {
+						// 	b.Grow(l + lenUUID)
+						// 	b.WriteString(prefix)
+						// } else {
+						// 	b.Grow(lenUUID)
+						// }
+						// aliases[i] = b
+						aliases[i] = batch.prefix(prefix)
+						// s.Logf(logDEBUG, "[%s]:%d '%s%v'\t  ->  %s   (%x)\n", key, i, ns, v, alias.String(), [16]byte(alias))
+						// aliasIndex++
+						// if aliasIndex >= expandedSize { // need to extend current pre-allocations
+						// 	aliasRequest = append(aliasRequest, make([]backendRequest, expandedSize)...)
+						// 	aliasHolders = append(aliasHolders, make([]strings.Builder, expandedSize)...)
+						// 	response = append(response, make([]map[string]interface{}, 0, batchSize)...)
+						// 	s.options.defaults.batchSize *= 2 // remember batch size increase for duration of microservice lifetime (container runtime session)
+						// 	s.Logf(logINFO, "batch size setting increased from %d to %d  -  environment variable 'BATCH_SIZE'\n", batchSize, s.options.defaults.batchSize)
+						// 	batchSize = s.options.defaults.batchSize // just for keeping everything in sync
+						// 	expandedSize += batchSize * specSize     // i.e doubling current size
+						// }
 					}
-					entity[key] = shaids
+					entity[key] = aliases
 				default:
 					parts := strings.Split(fmt.Sprintf("%v", value), ":")
 					if autoval && len(parts) > 2 {
 						prefix = fmt.Sprintf("~:%s:", parts[1])
-						ns = ""
+						ns = "" // namespace is already part of value string
 					}
-					shaid := uuid.NewSHA1(s.options.seed, []byte(fmt.Sprintf("%s%v", ns, value))) // format is "namespace:value" since non-empty namespace always includes ':'
-					entity[key] = fmt.Sprintf("%s%s", prefix, shaid.String())
-					s.Logf(logDEBUG, "[%s] '%s%v'\t  ->  %s   (%x)\n", key, ns, value, shaid.String(), [16]byte(shaid))
+					// alias := uuid.NewSHA1(s.options.seed, []byte(fmt.Sprintf("%s%v", ns, value))) // format is "namespace:value" since non-empty namespace always includes ':'
+					// entity[key] = fmt.Sprintf("%s%s", prefix, alias.String())
+					// b := &aliasHolders[aliasIndex]
+					// l := len(prefix)
+					// if l != 0 {
+					// 	b.Grow(l + lenUUID)
+					// 	b.WriteString(prefix)
+					// } else {
+					// 	b.Grow(lenUUID)
+					// }
+					// entity[key] = b
+					entity[key] = batch.prefix(prefix)
+					// s.Logf(logDEBUG, "[%s] '%s%v'\t  ->  %s   (%x)\n", key, ns, value, alias.String(), [16]byte(alias))
 				}
 			}
 
+			// aliasIndex++
+			// if aliasIndex >= expandedSize { // need to extend current pre-allocations
+			// 	aliasRequest = append(aliasRequest, make([]backendRequest, expandedSize)...)
+			// 	aliasHolders = append(aliasHolders, make([]strings.Builder, expandedSize)...)
+			// 	response = append(response, make([]map[string]interface{}, 0, batchSize)...)
+			// 	s.options.defaults.batchSize *= 2 // remember batch size increase for duration of microservice lifetime (container runtime session)
+			// 	s.Logf(logINFO, "batch size setting increased from %d to %d  -  environment variable 'BATCH_SIZE'\n", batchSize, s.options.defaults.batchSize)
+			// 	batchSize = s.options.defaults.batchSize // just for keeping everything in sync
+			// 	expandedSize += batchSize * specSize     // i.e doubling current size
+			// }
 		}
 		// TODO: make a testing-only flag here to make entity not possible to marshal, for testing HTTP 503 below
 		var data []byte
@@ -274,8 +330,19 @@ func (s *Server) HandleFieldNamespace(w http.ResponseWriter, r *http.Request, p 
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		result.Write(data)
+		// result.Write(data)
+		batch.add(&strictEntity)
 		total++
+		// aliasIndex++
+		// if aliasIndex >= expandedSize { // need to extend current pre-allocations
+		// 	aliasRequest = append(aliasRequest, make([]backendRequest, expandedSize)...)
+		// 	aliasHolders = append(aliasHolders, make([]strings.Builder, expandedSize)...)
+		// 	response = append(response, make([]map[string]interface{}, 0, batchSize)...)
+		// 	s.options.defaults.batchSize *= 2 // remember batch size increase for duration of microservice lifetime (container runtime session)
+		// 	s.Logf(logINFO, "batch size setting increased from %d to %d  -  environment variable 'BATCH_SIZE'\n", batchSize, s.options.defaults.batchSize)
+		// 	batchSize = s.options.defaults.batchSize // just for keeping everything in sync
+		// 	expandedSize += batchSize * specSize     // i.e doubling current size
+		// }
 	}
 
 	if _, err = dec.Token(); err != nil { // read closing bracket ']'
@@ -284,10 +351,12 @@ func (s *Server) HandleFieldNamespace(w http.ResponseWriter, r *http.Request, p 
 		return
 	}
 
-	result.WriteRune(']')
+	// result.WriteRune(']')
+	s.SendBatch(&batch)
+	s.WriteBatch(w, &batch)
 
 	// TODO: test-case with a failing w-ResponseWriter (simulating client peer closed connection etc) returning error for testing HTTP 503 below
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	// w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if _, err = fmt.Fprint(w, result.String()); err != nil {
 		s.Errorf("error writing response: %s\n", err)
 		w.WriteHeader(http.StatusInternalServerError)

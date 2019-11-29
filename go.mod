@@ -1,4 +1,4 @@
-module sesam-shaid
+module cim-identity
 
 go 1.13
 
